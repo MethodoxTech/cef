@@ -237,6 +237,9 @@ class AlloyBrowserHostImpl : public CefBrowserHostBase,
       content::RenderFrameHost* requesting_frame,
       const blink::mojom::FullscreenOptions& options) override;
   void ExitFullscreenModeForTab(content::WebContents* web_contents) override;
+  void RequestPointerLock(content::WebContents* web_contents,
+                          bool user_gesture,
+                          bool last_unlocked_by_target) override;
   bool IsFullscreenForTabOrPending(
       const content::WebContents* web_contents) override;
   blink::mojom::DisplayMode GetDisplayMode(
@@ -324,6 +327,11 @@ class AlloyBrowserHostImpl : public CefBrowserHostBase,
 
   // Used for capturing audio for CefAudioHandler.
   std::unique_ptr<CefAudioCapturer> audio_capturer_;
+
+  // When the user last pressed Escape to leave a pointer lock. A page may not
+  // lock the pointer again within a short time of that unless it released the
+  // lock itself, as with Chrome style.
+  base::TimeTicks last_pointer_lock_escape_time_;
 
   // Timer for determining when "recently audible" transitions to false. This
   // starts running when a tab stops being audible, and is canceled if it starts

@@ -48,11 +48,13 @@
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/render_view_host.h"
 #include "content/public/browser/render_widget_host.h"
+#include "content/public/browser/render_widget_host_view.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/url_constants.h"
 #include "extensions/common/constants.h"
 #include "net/base/net_errors.h"
 #include "ui/events/base_event_utils.h"
+#include "ui/events/keycodes/keyboard_codes.h"
 
 using content::KeyboardEventProcessingResult;
 
@@ -975,7 +977,47 @@ void AlloyBrowserHostImpl::CanDownload(
 KeyboardEventProcessingResult AlloyBrowserHostImpl::PreHandleKeyboardEvent(
     content::WebContents* source,
     const input::NativeWebKeyboardEvent& event) {
+  // Escape always releases a pointer lock, before the client or the page sees
+  // the key, so that a page cannot keep the pointer from the user. This matches
+  // Chrome style's PointerLockController::HandleUserPressedEscape().
+  if (event.GetType() == blink::WebInputEvent::Type::kRawKeyDown &&
+      event.windows_key_code == ui::VKEY_ESCAPE && source) {
+    content::RenderWidgetHostView* view = source->GetRenderWidgetHostView();
+    if (view && view->IsPointerLocked()) {
+      view->UnlockPointer();
+      last_pointer_lock_escape_time_ = base::TimeTicks::Now();
+      return KeyboardEventProcessingResult::HANDLED;
+    }
+  }
   return contents_delegate_.PreHandleKeyboardEvent(source, event);
+}
+
+void AlloyBrowserHostImpl::RequestPointerLock(content::WebContents* web_contents,
+                                              bool user_gesture,
+                                              bool last_unlocked_by_target) {
+  // The same policy as Chrome style's PointerLockController::
+  // RequestToLockPointer(): unless the page released the previous lock itself,
+  // the request needs a user gesture, and is refused for a short time after the
+  // user pressed Escape to leave a lock. Without this override the default
+  // WebContentsDelegate implementation refused every request with
+  // kUnknownError.
+  if (!last_unlocked_by_target) {
+    if (!user_gesture) {
+      web_contents->GotResponseToPointerLockRequest(
+          blink::mojom::PointerLockResult::kRequiresUserGesture);
+      return;
+    }
+    constexpr base::TimeDelta kEffectiveUserEscapeDuration =
+        base::Milliseconds(1250);
+    if (base::TimeTicks::Now() <
+        last_pointer_lock_escape_time_ + kEffectiveUserEscapeDuration) {
+      web_contents->GotResponseToPointerLockRequest(
+          blink::mojom::PointerLockResult::kUserEscapeCooldown);
+      return;
+    }
+  }
+  web_contents->GotResponseToPointerLockRequest(
+      blink::mojom::PointerLockResult::kSuccess);
 }
 
 bool AlloyBrowserHostImpl::HandleKeyboardEvent(
